@@ -1,0 +1,365 @@
+<Sysmon schemaversion="4.90">
+  <!--
+    EDR Project — Sysmon Configuration
+    ====================================
+    Tuned for the EDR detection engine (sysmon_handlers.py).
+    Based on SwiftOnSecurity/sysmon-config with additions for:
+      - Cobalt Strike named pipe detection
+      - LSASS access monitoring
+      - DGA / suspicious DNS
+      - Process hollowing
+      - Alternate Data Streams
+
+    Install:
+      sysmon64.exe -accepteula -i sysmonconfig.xml
+
+    Update (no reboot needed):
+      sysmon64.exe -c sysmonconfig.xml
+
+    Uninstall:
+      sysmon64.exe -u force
+
+    Rule logic:
+      include = log this (whitelist for noisy events like Ev3/Ev7)
+      exclude = suppress this (blacklist noise from trusted processes)
+      If no rules match an EventID, the default action applies:
+        ProcessCreate (1): default INCLUDE (log everything)
+        NetworkConnect (3): default EXCLUDE (too noisy — use include rules)
+        ImageLoad (7):     default EXCLUDE (too noisy — use include rules)
+        Others:            default INCLUDE
+  -->
+
+  <EventFiltering>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 1 — Process Create
+         Log everything. Short-lived processes are the #1 blind spot of
+         psutil-based agents. Full cmdline + SHA-256 hash fed to L0a/L1-L4.
+         Only exclude known-noisy system churn.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessCreate" groupRelation="or">
+      <ProcessCreate onmatch="exclude">
+        <!-- Windows maintenance / update churn -->
+        <Image condition="is">C:\Windows\System32\wermgr.exe</Image>
+        <Image condition="is">C:\Windows\System32\WerFault.exe</Image>
+        <Image condition="is">C:\Windows\System32\wuauclt.exe</Image>
+        <Image condition="is">C:\Windows\SoftwareDistribution\Download\Install\wusa.exe</Image>
+        <!-- Antivirus scanner churn (add your AV path here) -->
+        <Image condition="begin with">C:\Program Files\Windows Defender\</Image>
+        <!-- Background Intel microcode update -->
+        <Image condition="is">C:\Windows\System32\MicrosoftEdgeUpdate.exe</Image>
+        <!-- svchost spawning conhost — normal console host creation -->
+        <ParentImage condition="is">C:\Windows\System32\svchost.exe</ParentImage>
+        <Image condition="is">C:\Windows\System32\conhost.exe</Image>
+      </ProcessCreate>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 2 — File Creation Time Changed (timestomping T1070.006)
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="FileCreateTime" groupRelation="or">
+      <FileCreateTime onmatch="exclude">
+        <!-- Installers legitimately change timestamps -->
+        <Image condition="end with">setup.exe</Image>
+        <Image condition="end with">install.exe</Image>
+        <Image condition="is">C:\Windows\System32\msiexec.exe</Image>
+      </FileCreateTime>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 3 — Network Connect
+         Default EXCLUDE (too noisy). Include only:
+           - Non-browser processes making outbound connections
+           - Lateral movement ports (SMB/RDP/WinRM)
+           - Unusual ports from script engines
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="NetworkConnect" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <!-- Lateral movement ports — always log regardless of process -->
+        <DestinationPort condition="is">445</DestinationPort>
+        <DestinationPort condition="is">3389</DestinationPort>
+        <DestinationPort condition="is">5985</DestinationPort>
+        <DestinationPort condition="is">5986</DestinationPort>
+        <DestinationPort condition="is">135</DestinationPort>
+        <DestinationPort condition="is">139</DestinationPort>
+        <!-- Script engines making outbound connections — always suspicious -->
+        <Image condition="end with">powershell.exe</Image>
+        <Image condition="end with">pwsh.exe</Image>
+        <Image condition="end with">wscript.exe</Image>
+        <Image condition="end with">cscript.exe</Image>
+        <Image condition="end with">mshta.exe</Image>
+        <Image condition="end with">regsvr32.exe</Image>
+        <Image condition="end with">rundll32.exe</Image>
+        <Image condition="end with">certutil.exe</Image>
+        <Image condition="end with">bitsadmin.exe</Image>
+        <!-- Office apps making network connections — unusual, flag it -->
+        <Image condition="end with">winword.exe</Image>
+        <Image condition="end with">excel.exe</Image>
+        <Image condition="end with">powerpnt.exe</Image>
+        <Image condition="end with">outlook.exe</Image>
+        <!-- Non-standard ports from cmd.exe / .NET -->
+        <Image condition="end with">cmd.exe</Image>
+        <Image condition="end with">csc.exe</Image>
+        <Image condition="end with">msbuild.exe</Image>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 5 — Process Terminated (for timeline correlation)
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessTerminate" groupRelation="or">
+      <ProcessTerminate onmatch="exclude">
+        <!-- Suppress high-churn system processes -->
+        <Image condition="is">C:\Windows\System32\conhost.exe</Image>
+      </ProcessTerminate>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 6 — Driver Loaded
+         Log unsigned drivers — rootkit / bootkit indicator.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="DriverLoad" groupRelation="or">
+      <DriverLoad onmatch="exclude">
+        <!-- Signed Microsoft drivers — skip -->
+        <Signature condition="contains">Microsoft</Signature>
+        <Signature condition="contains">Windows</Signature>
+      </DriverLoad>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 7 — Image Loaded (DLL)
+         Default EXCLUDE (thousands per minute). Include:
+           - Unsigned DLLs loaded by LOLBins / script engines
+           - DLLs loaded from suspicious paths
+           - Known-abused DLL names loaded from wrong directories
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="ImageLoad" groupRelation="or">
+      <ImageLoad onmatch="include">
+        <!-- Unsigned DLLs loaded by script engines -->
+        <Image condition="end with">powershell.exe</Image>
+        <Image condition="end with">pwsh.exe</Image>
+        <Image condition="end with">wscript.exe</Image>
+        <Image condition="end with">cscript.exe</Image>
+        <Image condition="end with">mshta.exe</Image>
+        <Image condition="end with">rundll32.exe</Image>
+        <Image condition="end with">regsvr32.exe</Image>
+        <Image condition="end with">msbuild.exe</Image>
+        <Image condition="end with">installutil.exe</Image>
+        <!-- DLLs loaded from suspicious paths (DLL hijacking / side-loading) -->
+        <ImageLoaded condition="contains">\AppData\</ImageLoaded>
+        <ImageLoaded condition="contains">\Temp\</ImageLoaded>
+        <ImageLoaded condition="contains">\Public\</ImageLoaded>
+        <ImageLoaded condition="contains">\ProgramData\</ImageLoaded>
+        <ImageLoaded condition="contains">\Downloads\</ImageLoaded>
+        <!-- Unsigned flag — anything not signed -->
+        <Signed condition="is">false</Signed>
+      </ImageLoad>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 8 — CreateRemoteThread (Process Injection T1055)
+         Log ALL. Only suppress known-benign debugger → child pairs.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="CreateRemoteThread" groupRelation="or">
+      <CreateRemoteThread onmatch="exclude">
+        <!-- Visual Studio debugger attaching to child -->
+        <SourceImage condition="end with">devenv.exe</SourceImage>
+        <SourceImage condition="end with">msvsmon.exe</SourceImage>
+        <SourceImage condition="end with">vsjitdebugger.exe</SourceImage>
+        <!-- Adobe / browser child process injection (sandboxing) -->
+        <SourceImage condition="end with">AcroRd32.exe</SourceImage>
+        <!-- svchost → conhost (normal Windows console host startup) -->
+        <SourceImage condition="is">C:\Windows\System32\svchost.exe</SourceImage>
+        <TargetImage condition="is">C:\Windows\System32\conhost.exe</TargetImage>
+      </CreateRemoteThread>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 9 — RawAccessRead (direct disk access — T1006)
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="RawAccessRead" groupRelation="or">
+      <RawAccessRead onmatch="exclude">
+        <!-- AV / backup tools legitimately do raw reads -->
+        <Image condition="begin with">C:\Program Files\Windows Defender\</Image>
+        <Image condition="begin with">C:\Program Files\</Image>
+      </RawAccessRead>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 10 — ProcessAccess (LSASS credential dump T1003.001)
+         Log access to lsass.exe. Suppress benign callers.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessAccess" groupRelation="or">
+      <ProcessAccess onmatch="include">
+        <!-- Only care about LSASS access -->
+        <TargetImage condition="end with">lsass.exe</TargetImage>
+      </ProcessAccess>
+      <ProcessAccess onmatch="exclude">
+        <!-- Benign callers — suppress to reduce noise -->
+        <SourceImage condition="is">C:\Windows\System32\werfault.exe</SourceImage>
+        <SourceImage condition="is">C:\Windows\System32\taskmgr.exe</SourceImage>
+        <SourceImage condition="is">C:\Windows\System32\csrss.exe</SourceImage>
+        <SourceImage condition="begin with">C:\Program Files\Windows Defender\</SourceImage>
+        <GrantedAccess condition="is">0x1000</GrantedAccess>
+        <GrantedAccess condition="is">0x2000</GrantedAccess>
+      </ProcessAccess>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 11 — FileCreate
+         Log suspicious paths (temp dirs, startup) + ransom note filenames.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="FileCreate" groupRelation="or">
+      <FileCreate onmatch="include">
+        <!-- Startup folder (persistence T1547.001) -->
+        <TargetFilename condition="contains">Microsoft\Windows\Start Menu\Programs\Startup\</TargetFilename>
+        <!-- Suspicious temp drops -->
+        <TargetFilename condition="contains">\Temp\</TargetFilename>
+        <TargetFilename condition="contains">\AppData\Roaming\</TargetFilename>
+        <TargetFilename condition="contains">\Public\</TargetFilename>
+        <!-- Ransomware note filenames -->
+        <TargetFilename condition="contains">HOW_TO_DECRYPT</TargetFilename>
+        <TargetFilename condition="contains">RECOVERY_KEY</TargetFilename>
+        <TargetFilename condition="contains">README_FOR_DECRYPT</TargetFilename>
+        <TargetFilename condition="contains">YOUR_FILES_ARE_ENCRYPTED</TargetFilename>
+        <TargetFilename condition="contains">RESTORE_FILES</TargetFilename>
+        <!-- Ransomware extensions -->
+        <TargetFilename condition="end with">.encrypted</TargetFilename>
+        <TargetFilename condition="end with">.locked</TargetFilename>
+        <TargetFilename condition="end with">.crypt</TargetFilename>
+        <TargetFilename condition="end with">.enc</TargetFilename>
+        <!-- Script drops in suspicious locations -->
+        <TargetFilename condition="end with">.ps1</TargetFilename>
+        <TargetFilename condition="end with">.vbs</TargetFilename>
+        <TargetFilename condition="end with">.bat</TargetFilename>
+        <TargetFilename condition="end with">.hta</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENTS 12 & 13 — Registry Object Added / Registry Value Set
+         Log persistence-relevant keys only.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="RegistryEvent" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <!-- Run keys — classic persistence -->
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows\CurrentVersion\Run</TargetObject>
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce</TargetObject>
+        <!-- Winlogon / userinit hijack -->
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon</TargetObject>
+        <!-- AppInit DLLs — DLL injection on every user-mode process -->
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows\AppInit_DLLs</TargetObject>
+        <!-- Image File Execution Options — debugger hijacking T1546.012 -->
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options</TargetObject>
+        <!-- LSA packages — credential provider abuse T1547.002 -->
+        <TargetObject condition="contains">SYSTEM\CurrentControlSet\Control\Lsa</TargetObject>
+        <!-- Services — new service persistence T1543.003 -->
+        <TargetObject condition="contains">SYSTEM\CurrentControlSet\Services</TargetObject>
+        <!-- Shell open command hijack -->
+        <TargetObject condition="contains">Classes\exefile\shell\open\command</TargetObject>
+        <TargetObject condition="contains">Classes\mscfile\shell\open\command</TargetObject>
+        <!-- Disable Windows Defender via policy -->
+        <TargetObject condition="contains">SOFTWARE\Policies\Microsoft\Windows Defender</TargetObject>
+        <!-- AMSI disable -->
+        <TargetObject condition="contains">SOFTWARE\Microsoft\Windows Script\Settings\AmsiEnable</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 15 — FileCreateStreamHash (Alternate Data Streams T1564.004)
+         Log all non-Zone.Identifier ADS.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="FileCreateStreamHash" groupRelation="or">
+      <FileCreateStreamHash onmatch="exclude">
+        <!-- Zone.Identifier is normal (marks downloaded files) -->
+        <TargetFilename condition="end with">:Zone.Identifier</TargetFilename>
+        <!-- Dropbox / cloud sync metadata streams -->
+        <TargetFilename condition="end with">:com.dropbox.attrs</TargetFilename>
+      </FileCreateStreamHash>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 17 — PipeEvent (Pipe Created) — Cobalt Strike detection
+         EVENT 18 — PipeEvent (Pipe Connected)
+         Log all pipes created by non-System processes, exclude obvious noise.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="PipeEvent" groupRelation="or">
+      <PipeEvent onmatch="exclude">
+        <!-- Windows printing subsystem -->
+        <PipeName condition="begin with">\print\</PipeName>
+        <PipeName condition="begin with">\Pipe\spoolss</PipeName>
+        <!-- Chrome sandbox -->
+        <PipeName condition="begin with">\chrome.</PipeName>
+        <!-- SQL Server pipes -->
+        <PipeName condition="begin with">\sql\query</PipeName>
+        <!-- WMI -->
+        <PipeName condition="begin with">\PIPE\winmgmt</PipeName>
+      </PipeEvent>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 22 — DNS Query
+         Log queries from non-browser processes and suspicious TLDs.
+         Browsers generate too much noise — exclude them for common TLDs.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="DnsQuery" groupRelation="or">
+      <DnsQuery onmatch="include">
+        <!-- Script engines / LOLBins querying DNS — always suspicious -->
+        <Image condition="end with">powershell.exe</Image>
+        <Image condition="end with">pwsh.exe</Image>
+        <Image condition="end with">wscript.exe</Image>
+        <Image condition="end with">cscript.exe</Image>
+        <Image condition="end with">mshta.exe</Image>
+        <Image condition="end with">rundll32.exe</Image>
+        <Image condition="end with">regsvr32.exe</Image>
+        <Image condition="end with">certutil.exe</Image>
+        <Image condition="end with">cmd.exe</Image>
+        <Image condition="end with">msbuild.exe</Image>
+        <!-- Office apps making DNS queries -->
+        <Image condition="end with">winword.exe</Image>
+        <Image condition="end with">excel.exe</Image>
+        <Image condition="end with">powerpnt.exe</Image>
+        <!-- Suspicious TLDs queried by any process -->
+        <QueryName condition="end with">.xyz</QueryName>
+        <QueryName condition="end with">.top</QueryName>
+        <QueryName condition="end with">.pw</QueryName>
+        <QueryName condition="end with">.cc</QueryName>
+        <QueryName condition="end with">.tk</QueryName>
+        <QueryName condition="end with">.gq</QueryName>
+        <QueryName condition="end with">.ml</QueryName>
+        <QueryName condition="end with">.cf</QueryName>
+      </DnsQuery>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 23 — FileDelete (deleted + archived)
+         Log mass file deletion from script engines / unusual processes.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="FileDelete" groupRelation="or">
+      <FileDelete onmatch="include">
+        <!-- Deletions by script engines are suspicious -->
+        <Image condition="end with">powershell.exe</Image>
+        <Image condition="end with">pwsh.exe</Image>
+        <Image condition="end with">cmd.exe</Image>
+        <Image condition="end with">wscript.exe</Image>
+        <Image condition="end with">cscript.exe</Image>
+        <!-- Shadow copy / backup deletion (ransomware prep) -->
+        <Image condition="end with">vssadmin.exe</Image>
+        <Image condition="end with">wbadmin.exe</Image>
+        <Image condition="end with">diskshadow.exe</Image>
+      </FileDelete>
+    </RuleGroup>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         EVENT 25 — ProcessTampering (Process Hollowing T1055.012)
+         Log ALL — Sysmon kernel detection of hollowed processes.
+         No exclusions — this event has an extremely low false positive rate.
+         ══════════════════════════════════════════════════════════════════ -->
+    <RuleGroup name="ProcessTampering" groupRelation="or">
+      <ProcessTampering onmatch="exclude">
+        <!-- No exclusions — every tampering event is suspicious -->
+      </ProcessTampering>
+    </RuleGroup>
+
+  </EventFiltering>
+</Sysmon>

@@ -1,0 +1,62 @@
+# Server
+flask==3.0.3
+networkx==3.3
+scikit-learn==1.5.1
+numpy==1.26.4
+PyYAML==6.0.1
+PyJWT==2.8.0             # JWT signing/verification — replaces hand-rolled JWT
+joblib==1.4.2            # ML model persistence (save/load trained Isolation Forest)
+                        # Alerting (server/notifier.py) uses stdlib only — no extra deps:
+                        #   urllib, smtplib, threading, json — all built-in
+
+# Advanced ML (Priority 1 enhancements) — OPTIONAL but HIGHLY RECOMMENDED
+# Install with: pip install tensorflow torch dgl
+# These enable L11 (Deep Sequence LSTM), L12 (Graph Neural Network), L13 (Behavioral Baseline)
+# System degrades gracefully without them — traditional 10-layer detection still works
+#
+# tensorflow==2.15.0      # L11 Deep Sequence LSTM + L13 Behavioral Baseline
+# torch==2.1.0            # L12 Graph Neural Network (GNN)
+# dgl==1.1.3              # Deep Graph Library for GNN (install after torch)
+#
+# Installation notes:
+#   Windows: pip install tensorflow torch dgl -f https://data.dgl.ai/wheels/repo.html
+#   Linux:   pip install tensorflow torch dgl
+#   macOS:   pip install tensorflow torch dgl
+#
+# GPU acceleration (optional, 10x faster training):
+#   tensorflow-gpu==2.15.0  # NVIDIA GPU + CUDA 11.8
+#   torch with CUDA:         pip install torch --index-url https://download.pytorch.org/whl/cu118
+
+# Agent
+psutil==5.9.8
+requests==2.31.0
+pywin32==306          # Windows API (service install, RDCW, wevtutil helpers)
+                      # Install: pip install pywin32
+                      # After install run: python -m pywin32_postinstall -install
+                      # Required for Windows service mode (agent_service.py)
+yara-python==4.5.1    # In-memory YARA scanning (fileless malware detection)
+                      # Install: pip install yara-python
+                      # On Windows, use the pre-built wheel:
+                      #   pip install yara-python --only-binary :all:
+                      #
+                      # ETW telemetry — two backends, no extra deps needed:
+                      #
+                      # Backend A (richest): Drop SilkETW.exe next to agent.py
+                      #   https://github.com/fireeye/SilkETW/releases
+                      #   Requires Administrator. Set EDR_SILKETW_PATH if not
+                      #   in the same directory.
+                      #
+                      # Backend B (fallback): wevtutil.exe — built into Windows.
+                      #   Covers process creation (4688), PS scriptblock (4104),
+                      #   scheduled tasks (4698), service install (7045),
+                      #   account changes (4720/4732). No extra install needed.
+
+# Optional — production WSGI server (replaces Flask dev server)
+# waitress==3.0.0        # Windows-native, zero C deps
+# gunicorn==22.0.0       # Linux/macOS
+
+# Optional — PostgreSQL backend (swap for SQLite at scale)
+# psycopg2-binary==2.9.9
+
+# Signature-based detection (NEW)
+# yara-python>=4.3.1  # Uncomment to enable YARA signatures

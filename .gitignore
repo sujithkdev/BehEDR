@@ -1,0 +1,76 @@
+# ── Secrets & credentials ────────────────────────────────────────────────────
+.env
+.env.local
+.env.production
+*.key
+*.pem
+*.crt
+data/server.crt
+data/server.key
+
+# ── Runtime data (never commit) ──────────────────────────────────────────────
+data/edr.db
+data/malware_hashes.db
+data/vt_cache.json
+data/ioc_feed.json
+data/users.json
+data/password_history.json
+data/ml_model.joblib
+data/lstm_sequence_model.h5
+data/lstm_vocab.pkl
+data/lstm_tokenizer.pkl
+data/hash_db_updates.log
+data/.hash_db_last_update
+data/backups/
+data/vector_db/
+data/playbooks.yaml
+
+# ── Compiled YARA rules ───────────────────────────────────────────────────────
+rules/yara/compiled_rules.yrc
+rules/yara/rules_index.json
+rules/yara/detection_stats.json
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+watchdog.log
+agent.log
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.user
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+*.spec
+dist/
+build/
+*.exe
+*.msi
+
+data/*.db
+data/*.json
+data/

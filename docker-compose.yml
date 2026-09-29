@@ -1,0 +1,139 @@
+# docker-compose.yml — Docker Compose deployment for BehEDR Server
+#
+# Quick start:
+#   1. Copy this file to your project root
+#   2. Edit environment variables below
+#   3. Run: docker-compose up -d
+#   4. Access: http://localhost:5000
+#
+# Production deployment:
+#   - Change all default passwords/keys
+#   - Enable TLS (set EDR_TLS_ENABLED=true)
+#   - Configure email digest
+#   - Add threat intel API keys
+#   - Use external PostgreSQL for >100 endpoints
+
+version: '3.8'
+
+services:
+  edr-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: behedr-server
+    ports:
+      - "5000:5000"    # HTTP (or HTTPS if TLS enabled)
+    environment:
+      # ═══ Core Settings ═══
+      EDR_API_KEY: ${EDR_API_KEY:-123456789}            # CHANGE THIS!
+      EDR_JWT_SECRET: ${EDR_JWT_SECRET:-change-me-in-production-min-32-chars!}  # CHANGE THIS!
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-edr-flask-secret-change-in-production-2026}  # CHANGE THIS!
+      EDR_PORT: 5000
+      
+      # ═══ TLS/HTTPS (optional) ═══
+      EDR_TLS_ENABLED: ${EDR_TLS_ENABLED:-false}        # Set to 'true' for HTTPS
+      # EDR_TLS_CERT: /app/certs/server.crt            # Path to certificate
+      # EDR_TLS_KEY: /app/certs/server.key             # Path to private key
+      
+      # ═══ Email Digest (optional) ═══
+      EDR_DIGEST_ENABLED: ${EDR_DIGEST_ENABLED:-false}  # Set to 'true' to enable
+      EDR_DIGEST_TIME: ${EDR_DIGEST_TIME:-08:00}        # Send time (HH:MM)
+      EDR_DIGEST_EMAILS: ${EDR_DIGEST_EMAILS:-}         # Comma-separated emails
+      EDR_SMTP_HOST: ${EDR_SMTP_HOST:-smtp.gmail.com}
+      EDR_SMTP_PORT: ${EDR_SMTP_PORT:-587}
+      EDR_SMTP_USER: ${EDR_SMTP_USER:-}
+      EDR_SMTP_PASS: ${EDR_SMTP_PASS:-}
+      EDR_SERVER_URL: ${EDR_SERVER_URL:-http://localhost:5000}
+      
+      # ═══ Threat Intelligence (optional) ═══
+      VT_API_KEY: ${VT_API_KEY:-}                       # VirusTotal
+      OTX_API_KEY: ${OTX_API_KEY:-}                     # AlienVault OTX
+      SHODAN_API_KEY: ${SHODAN_API_KEY:-}               # Shodan
+      MISP_URL: ${MISP_URL:-}                           # MISP instance
+      MISP_API_KEY: ${MISP_API_KEY:-}                   # MISP key
+      
+      # ═══ Notifications (optional) ═══
+      EDR_NOTIFY_SLACK_URL: ${EDR_NOTIFY_SLACK_URL:-}  # Slack webhook
+      EDR_NOTIFY_TEAMS_URL: ${EDR_NOTIFY_TEAMS_URL:-}  # Teams webhook
+      EDR_NOTIFY_PD_KEY: ${EDR_NOTIFY_PD_KEY:-}        # PagerDuty key
+      
+      # ═══ Development Mode (DO NOT USE IN PRODUCTION) ═══
+      EDR_DEV_MODE: ${EDR_DEV_MODE:-false}              # Enables /simulate endpoint
+      
+    volumes:
+      # Persist database and logs
+      - ./data:/app/data
+      - ./logs:/app/logs
+      
+      # Persist ML models
+      - ./models:/app/models
+      
+      # TLS certificates (if using custom certs)
+      # - ./certs:/app/certs:ro
+      
+      # Custom rules (optional)
+      - ./rules:/app/rules
+      
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    networks:
+      - edr-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PostgreSQL (optional - for >100 endpoints)
+  # Uncomment this section and update server/__init__.py to use PostgreSQL
+  # ═══════════════════════════════════════════════════════════════════
+  
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: behedr-postgres
+  #   environment:
+  #     POSTGRES_DB: edr
+  #     POSTGRES_USER: edr
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}  # CHANGE THIS!
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - edr-network
+  #   restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Redis (optional - for scaling beyond 100 endpoints)
+  # Used for event queue and caching
+  # ═══════════════════════════════════════════════════════════════════
+  
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: behedr-redis
+  #   command: redis-server --appendonly yes
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - edr-network
+  #   restart: unless-stopped
+
+networks:
+  edr-network:
+    driver: bridge
+
+volumes:
+  # Uncomment if using PostgreSQL
+  # postgres-data:
+  
+  # Uncomment if using Redis
+  # redis-data:
+  
+  # For bind mounts, no volume definition needed
